@@ -17,7 +17,8 @@ topics:
   - OneTrans / Scaling Law
 outcome: 二面通过，5.12 HR 面
 ---
-
+JD
+![[哔哩哔哩-推荐算法工程师（工业化）.png]]
 # 一面（已过）
 
 ## 面试概况
