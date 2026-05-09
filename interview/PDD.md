@@ -1,130 +1,103 @@
-Abstract中将TIGER定义为一个 **召回层** 的框架
-比起之前的序列推荐范式，从ANN search变成了directly predict SID
+---
+tags:
+  - interview
+  - recsys
+  - pdd
+  - engineering
+company: PDD
+position: RecSys Engineer（工程研发）
+date: 2026-04-16
+round: "1"
+topics: 岗位不匹配, 华为项目底层原理, GoLang请求处理, TIGER数据集线上调用, 工程竞争力, 美本美硕含金量
+outcome: 岗位不匹配
+---
 
-## Framework
-Two stages:
-### 1. Semantic ID generation using content features
-![[TIGER.pdf#page=4&rect=106,474,506,724&color=yellow|TIGER, p.4]]
-- **Item Embeddings**:
-	- Each item has associated content features that capture useful semantic information (e.g. titles or descriptions or images). 
-	- Content features are embedded by a pre-trained text encoders such as Sentence-T5 or BERT (我的复现中用的nomic-embed-text).
-	- Semantic embeddings are quantized to generate an SID for each item.
-- **Semantic ID definitions and properties** in this paper
-	- a tuple of codewords of length m
-	- number of items is equal to the product of the codebook sizes
-	- similar items (items with similar semantic embeddings or similar context features) should have overlapping SIDs
-- **RQ-VAE** (Residual-Quantized Variational AutoEncoder) for SIDs
-	- The auto-encoder is jointly trained by updating the quantization codebook and the DNN encoder-decoder parameters.
-	- Why we use a separate codebook of size K for each of the m levels, instead of using a single, mK-sized codebook?
-		- Because the norm of residuals tends to decrease with increasing levels, hence allowing for different granularities for different levels.
-#### RQ-VAE Framework
-- DNN encoder就是最简单的MLP，712 -> 512 -> 256 -> 128 -> 32，中间过程激活函数是ReLU。Decoder大概率是跟encoder对称的结构，解码回768的原始语义嵌入空间。Decoder的唯一目的就是提供训练信号，让我们知道量化后的离散码丢失了多少信息，倒逼Encoder和Codebook学习到高质量的量化表示。
-- Residual Quantizer量化层级数 $m = 3$，每层独立codebook，大小 $K = 256$， 每个codebook vector的维度 = 32。每个level的codebook就是一个可学习的矩阵：
-	```
-	Codebook C_d  ∈  R^{K × d_latent}  =  R^{256 × 32}
-	```
-- **量化时的查找过程**：给定encoder输出的残差 $r_d \in \mathbb{R}^{32}$，找最近的码本向量：$c_d = \arg\min_k \|r_d - C_d[k]\|^2$。实现上展开距离公式用矩阵运算一次性算完：
-	$$\|r_d - C_d[k]\|^2 = \|r_d\|^2 - 2\,r_d^\top C_d[k] + \|C_d[k]\|^2$$
-	```python
-	# r: [batch, 32],  codebook: [256, 32]
-	distances = (
-	    (r ** 2).sum(dim=-1, keepdim=True)              # [batch, 1]
-	    - 2 * r @ codebook.T                             # [batch, 256]
-	    + (codebook ** 2).sum(dim=-1, keepdim=True).T    # [1, 256]
-	)
-	indices = distances.argmin(dim=-1)  # [batch] ← 这就是 codeword
-	```
-- **损失函数**：$L(x) = L_{recon} + L_{rqvae}$
-	- **Reconstruction loss**（更新 encoder + decoder）：$L_{recon} = \|x - \hat{x}\|^2$
-	- **$L_{rqvae}$** 因为量化操作（argmin）不可微，用 stop-gradient (sg) 把联合优化拆成两个方向：
-		- **Codebook loss**（只更新 codebook vectors）：$\|\text{sg}[r_i] - e_{c_i}\|^2$，把 encoder 输出当固定目标，拉 codebook 向量靠近残差
-		- **Commitment loss**（只更新 encoder）：$\beta\|r_i - \text{sg}[e_{c_i}]\|^2$，把 codebook 向量当固定目标，迫使 encoder 输出稳定在码本向量附近，$\beta = 0.25$
-	```
-	Encoder 输出 rᵢ  ←── commitment loss ──→  Codebook 向量 e_cᵢ
-	  (encoder 往码本靠)                        (码本往 encoder 靠)
-	        ↑                                        ↑
-	   sg 在 e_cᵢ 上                            sg 在 rᵢ 上
-	   只更新 encoder                           只更新 codebook
-	```
-- **Codebook 的 k-means 初始化**：防止 codebook collapse（随机初始化导致大量码本向量远离数据分布，永远不被选中）。在第一个 training batch 上**逐级串行**初始化：
-	1. Level 0：encoder 输出 $z = E(x)$ 上跑 k-means (K=256)，聚类中心作为 $C_0$ 初始值
-	2. Level 1：用已初始化的 $C_0$ 对 $z$ 量化，得残差 $r_1 = z - e_{c_0}$，对 $r_1$ 跑 k-means，聚类中心作为 $C_1$ 初始值
-	3. Level 2：同理，对 $r_2 = r_1 - e_{c_1}$ 跑 k-means 初始化 $C_2$
-	- 必须逐级初始化，因为每级残差的分布和尺度不同（norm 递减）。这保证每个码本向量都落在该级残差的密集区域内，codebook usage 达到 ≥ 80%。
-- 码本里面的index是纯粹的整数标签，100、200、201之间没有距离上的意义
-- **Handling Collisions**:
-	这个是训练后一次性的后处理，训练过程中不关心碰撞
-	```
-	1. 用训练好的 encoder + quantizer 给所有 item 生成 3-tuple SID
-	2. 建一个 lookup table: {SID → [item list]}
-	3. 遍历 lookup table:
-	   - 如果某个 SID 只对应 1 个 item  → 追加 0 → (c₀, c₁, c₂, 0)
-	   - 如果某个 SID 对应 k 个 item   → 分别追加 0,1,...,k-1
-	4. 最终每个 item 都有唯一的 4-tuple SID
-	```
-	注意前3位有语义层级结构，但第4位纯粹是任意分配的序号。
-- 新Item的SID编码流程：
-	```
-	新 item 的 content features
-	    │
-	    ▼  Sentence-T5（已有，不用重新训练）
-	768 维 embedding
-	    │
-	    ▼  RQ-VAE encoder + quantizer（已训练好，直接推理）
-	3-tuple: (c₀, c₁, c₂)
-	    │
-	    ▼  查 lookup table
-	    │
-	    ├─ 该 3-tuple 不存在 → 分配 (c₀, c₁, c₂, 0) ✅
-	    │
-	    └─ 该 3-tuple 已有 k 个 item → 分配 (c₀, c₁, c₂, k) ✅
-	```
+## 面试概况
 
-### 2. Training a generative recommender system on SIDs (§3.2)
+- **面试官方向**：搜广推工程方向，负责模型训练后的**上线部署与推理优化**（非算法研究）
+- **岗位匹配度**：❌ 不匹配——投的是算法岗，实际面的是工程研发岗
+- **面试性质**：有技术考察（围绕简历项目深挖底层工程原理），后半段转为职业规划交流
 
-#### 核心思路：用 Seq2Seq 直接生成下一个 item 的 Semantic ID
-- 传统方法：学 embedding → 建 ANN 索引 → 近邻搜索召回候选
-- TIGER：**直接用 Transformer decoder 逐 token 预测下一个 item 的 SID tuple**，把检索变成生成任务
+---
 
-#### 输入序列构造
-- 每个用户的交互序列按时间排序：$(\text{item}_1, \dots, \text{item}_n)$，目标是预测 $\text{item}_{n+1}$
-- 设 item$_i$ 的 $m$-长 Semantic ID 为 $(c_{i,0}, c_{i,1}, \dots, c_{i,m-1})$，将交互历史展平拼接为：
-	$$(\underbrace{c_{1,0}, \dots, c_{1,m-1}}_{\text{item}_1}, \underbrace{c_{2,0}, \dots, c_{2,m-1}}_{\text{item}_2}, \dots, \underbrace{c_{n,0}, \dots, c_{n,m-1}}_{\text{item}_n})$$
-- 模型要生成的 target 就是 $\text{item}_{n+1}$ 的 SID：$(c_{n+1,0}, \dots, c_{n+1,m-1})$
-- 输入最前面还拼了一个 **user ID token**（用 Hashing Trick 映射到 2000 个桶之一），发现加 user ID 能提升个性化效果
+## 技术问题
 
-#### Seq2Seq 模型架构（基于 T5X）
-- **Encoder-Decoder Transformer**：
-	- Encoder 和 Decoder 各 **4 层**
-	- **6 个 self-attention heads**，dimension = 64
-	- MLP 维度：输入 1024，输出 128
-	- 激活函数：ReLU，Dropout = 0.1
-	- 总参数量约 **13M**
-> ([[TIGER.pdf#page=6&annotation=776R|TIGER, p.6]])
-> To allow the model to process the input for the sequential recommendation task, the vocabulary of the sequence-to-sequence model contains the tokens for each semantic codeword. In particular, the vocabulary contains 1024 (256 × 4) tokens to represent items in the corpus. In addition to the semantic codewords for items, we add user-specific tokens to the vocabulary. To keep the vocabulary size limited, we only add 2000 tokens for user IDs.
-- **词表设计**：
-	- Semantic codeword tokens：$256 \times 4 = 1024$ 个（4 层 codebook，每层 256）
-	- User ID tokens：2000 个（通过 Hashing Trick 从原始 user ID 映射）
-	- 总词表大小受控，保持轻量
+### 主题：华为实习项目 → 数据存储与调用底层原理
+[[CV#华为上海研究所 · DTS 问题单-MO 参数语义检索]]
 
-#### 训练细节
-- Batch size = 256
-- Learning rate = 0.01（前 10k steps），之后用 **inverse square root decay**
-- Beauty / Sports and Outdoors 数据集训练 **200k steps**
-- Toys and Games 数据集较小，训练 **100k steps**
-- 优化器：Adagrad（RQ-VAE 部分用的也是 Adagrad）
+**Q：华为项目里数据存储和调用的底层原理是什么？**
 
-#### 生成的 SID 可能不匹配任何 item
-- 因为是自回归生成，decoder 输出的 SID tuple 不一定在 item corpus 的 lookup table 中
-- 论文 Fig. 6 显示这种"无效生成"的概率很低
-- 处理方式见 Appendix E（beam search 时可以用 constrained decoding 等策略）
+> （当时回答情况：未深入阐述底层存储与在线检索链路）
+> 
+> **理想答法：**
+> - **Embedding 向量存储**：离线生成 MO 参数的 embedding 后，写入向量索引（如 FAISS / 内部向量库），支持 ANN 检索
+> - **在线调用链路**：Query（DTS 问题单文本）→ Encoder → query embedding → ANN 检索 top-k → 重排/过滤 → 返回匹配参数
+> - **底层索引结构**：IVF / HNSW 等近似最近邻算法，tradeoff recall 与 latency
+> - **数据更新**：MO 参数库变更时如何做增量更新 or 全量重建索引
 
-#### 与传统方法的关键区别
-| | 传统 retrieve-and-rank | TIGER generative retrieval |
-|---|---|---|
-| 表示 | item → 高维连续 embedding | item → 短离散 SID tuple |
-| 检索 | ANN (MIPS) | Transformer autoregressive decode |
-| 索引 | 显式向量索引（FAISS 等） | Transformer 参数即隐式索引 |
-| 新 item | 需重建索引 | 只需生成 SID，无需重建 |
-| 存储 | 高维向量，内存开销大 | 整数 tuple + lookup table，极轻量 |
+---
 
+### 主题：GoLang 项目 → 收到请求后的处理流程
+[[CV#分布式 Paxos 一致性协议驱动的分布式键值存储系统]]
+
+**Q：GoLang 收到一个请求后，是如何完成一个完整操作的？**
+
+> （当时回答情况：流程描述不够完整，缺少 Paxos 内部细节）
+> 
+> **理想答法：**
+> - **请求入口**：HTTP/gRPC server 接收请求，路由层（一致性哈希）判断该请求应发往哪个分片
+> - **Paxos 写流程**：Put/Append → Proposer 发起 Prepare → Acceptor 多数派应答 → Accept → Commit → 返回 client
+> - **Paxos 读流程**：Get → 可选走 Leader read（强一致）or 本地读（最终一致）→ 查 KV store → 返回
+> - **容错处理**：超时重试、日志同步、重连机制
+> - **GoLang 的并发模型**：goroutine 处理每个请求，channel 协调 Proposer/Acceptor 间通信
+
+---
+
+### 主题：TIGER 项目 → 数据集线上调用底层原理
+[[CV#基于语义ID的生成式序列推荐系统（TIGER）]]
+
+**Q：TIGER 项目中数据集是如何线上调用的？底层原理是什么？**
+
+> （当时回答：用的是 Amazon 的一个很小的数据集，所以没有了解线上调用的原理）
+> 
+> **补充学习点：**
+> - **离线 vs 线上的本质区别**：实验室用静态文件（.csv / .pkl），线上需要实时 feature lookup
+> - **线上调用链路**：用户请求 → 实时获取用户行为序列 → Feature Store 拉取 item embedding / SID → T5 beam search → 返回推荐结果
+> - **SID 存储**：RQ-VAE 离线生成所有 item 的 4-token SID，存入 KV store（Redis / Cassandra），线上 O(1) 查询
+> - **数据规模差异**：Amazon 玩具数据集 ~3000 items，工业级百亿量级，涉及分布式存储与分片策略
+
+---
+
+## 面谈内容
+
+### Q：如果走工程方向，如何提高竞争力？
+
+> - 做一个**小项目**证明对技术栈有实际研究，不需要大，但要有深度
+> - 关注**工程实现细节**，而非只懂算法原理
+> - 从**性能视角**优化推理过程（延迟、吞吐、显存占用）
+> - 重点掌握检索框架，以 FAISS 为例：底层算法原理 → 工程实现 → 性能优化调参
+> - 理解整个推荐链路如何工程落地（召回 → 粗排 → 精排 → 重排）
+>
+> ⚠️ **面试官建议**：当前简历对算法岗而言不够前沿，更建议继续深造、做更前沿的算法研究
+
+---
+
+### Q：美本美硕的含金量
+
+> - QS 排名较高的学校不会被卡，基本等同于国内 985 对待
+> - 建议想办法把**交大经历写上去**（可以以转学身份写），增强简历背景
+
+---
+
+## 反问环节
+
+（本次以面试官给建议为主，无正式反问）
+
+---
+
+## 复盘 / 总结
+
+> - 投递前需要更仔细地看 JD，区分算法岗和工程研发岗
+> - **技术薄弱点**：项目底层工程原理（数据存储/调用链路）掌握不够深，只知道算法层不知道系统层
+> - TIGER 项目的线上 serving 是明显短板，需要补充工业级 feature store 和 serving 知识
+> - 面试官明确建议走算法方向需要更前沿的研究背景，继续深造是更优路径
