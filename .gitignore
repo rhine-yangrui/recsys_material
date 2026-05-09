@@ -34,3 +34,6 @@ env/
 
 # External repo (王树森 RecommenderSystem clone — manage separately)
 Shusen_Wang/
+
+# Quarantined corrupted files awaiting Obsidian File Recovery
+.recovery-quarantine/
