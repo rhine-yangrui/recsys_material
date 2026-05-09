@@ -32,8 +32,9 @@ env/
 *.tmp
 .cache/
 
-# External repo (王树森 RecommenderSystem clone — manage separately)
+# External repo (王树森 RecommenderSystem clones — manage separately)
 Shusen_Wang/
+王树森推荐系统课程/
 
 # Quarantined corrupted files awaiting Obsidian File Recovery
 .recovery-quarantine/
