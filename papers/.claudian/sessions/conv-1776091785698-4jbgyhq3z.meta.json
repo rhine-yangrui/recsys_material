@@ -1,0 +1,24 @@
+{
+  "id": "conv-1776091785698-4jbgyhq3z",
+  "providerId": "claude",
+  "title": "Begin conversation",
+  "titleGenerationStatus": "success",
+  "createdAt": 1776091785704,
+  "updatedAt": 1776200788584,
+  "lastResponseAt": 1776093643379,
+  "sessionId": "d3ee1cc3-3e02-4d6f-b3f0-3a1b5ee4ea0f",
+  "providerState": {
+    "providerSessionId": "d3ee1cc3-3e02-4d6f-b3f0-3a1b5ee4ea0f"
+  },
+  "currentNote": "BERT.md",
+  "usage": {
+    "model": "sonnet",
+    "inputTokens": 3,
+    "cacheCreationInputTokens": 558,
+    "cacheReadInputTokens": 22976,
+    "contextWindow": 200000,
+    "contextTokens": 23537,
+    "percentage": 12,
+    "contextWindowIsAuthoritative": true
+  }
+}

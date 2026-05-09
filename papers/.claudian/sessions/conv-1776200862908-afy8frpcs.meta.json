@@ -1,0 +1,24 @@
+{
+  "id": "conv-1776200862908-afy8frpcs",
+  "providerId": "claude",
+  "title": "Add brief image annotations: SEP, CLIS, NSP",
+  "titleGenerationStatus": "success",
+  "createdAt": 1776200862908,
+  "updatedAt": 1776304361132,
+  "lastResponseAt": 1776304361132,
+  "sessionId": "6647fda7-6e48-4b36-a63c-7b0ef5687780",
+  "providerState": {
+    "providerSessionId": "6647fda7-6e48-4b36-a63c-7b0ef5687780"
+  },
+  "currentNote": "BERT.md",
+  "usage": {
+    "model": "sonnet",
+    "inputTokens": 3,
+    "cacheCreationInputTokens": 19955,
+    "cacheReadInputTokens": 0,
+    "contextWindow": 200000,
+    "contextTokens": 19958,
+    "percentage": 10,
+    "contextWindowIsAuthoritative": true
+  }
+}

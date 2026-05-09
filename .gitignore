@@ -1,0 +1,36 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Obsidian — UI state churns constantly, ignore but keep config
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/workspaces.json
+.obsidian/cache
+.obsidian/plugins/*/data.json
+
+# Claudian — session logs are large, private, and regenerated
+.claudian/sessions/
+
+# Python / ML
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build / temp
+*.log
+*.tmp
+.cache/
+
+# External repo (王树森 RecommenderSystem clone — manage separately)
+Shusen_Wang/
